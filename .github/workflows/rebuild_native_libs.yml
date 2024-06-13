@@ -1,396 +1,591 @@
-name: Build and Push Release CXX/Rust libraries
-on:
-  workflow_dispatch:
-# This workflow is triggered manually from the Actions tab.
-# It's meant to be run on a PR that changes the native C++ code.
-
-# It builds native libraries for all supported platforms and pushes them to the current branch.
-# It splits the building process into 3 build jobs:
-# 1. build-freebsd - Builds native libraries for x64 FreeBSD
-# 2. build-macos - Builds native libraries for MacOS: both ARM and x64.
-#    It uses native runners for each platform, because cross compilation on MacOS is complicated.
-# 3. build-others - Builds native libraries for x64 Linux, ARM Linux and Windows.
-#    It uses cross-compilation for ARM Linux and Windows.
-#
-# Each build job saves the resulting binaries to the cache under a unique key
-# When all build jobs are finished, the collect-commit-and-push job restores the binaries from the cache
-# and pushes them to the current branch.
-
 jobs:
-  build-rust-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Build Rust Library
-        run: |
-          cd core/rust/qdbr
-          cargo build --release
-      - name: log git status
-        run: |
-          git status
-      - name: Copy Rust Library to the final directory
-        run: |
-          cp core/rust/qdbr/target/release/questdbr.dll core/src/main/resources/io/questdb/bin/windows-amd64/
-      - name: Save Windows Rust Library to Cache
-        uses: actions/cache/save@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/windows-amd64/questdbr.dll
-          key: nativelibs-windows-rust-${{ github.sha }}
-          enableCrossOsArchive: true
   build-all-freebsd:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Build in FreeBSD
-        # @d44bf830e7d is the same as the tag v1, but it's guaranteed to be immutable.
-        uses: vmactions/freebsd-vm@d44bf830e7d850111d27aa120d468c905e5980f4
-        with:
-          # FreeBSD 13.2
-          release: 13.2
-          usesh: true
-          prepare: |
-            pkg install -y curl cmake gcc git nasm openjdk17 rust
-          run: |
-            export JAVA_HOME=/usr/local/openjdk17
-            cd core
-            cmake -B build/release -DCMAKE_BUILD_TYPE=Release
-            cmake --build build/release --config Release
-            mkdir -p src/main/resources/io/questdb/bin/freebsd-amd64/
-            cp target/classes/io/questdb/bin-local/libquestdb.so src/main/resources/io/questdb/bin/freebsd-amd64/
-            cd rust/qdbr
-            cargo build --release
-            cp target/release/libquestdbr.so ../../src/main/resources/io/questdb/bin/freebsd-amd64/
-      - name: log git status
-        run: |
-          git status
-      - name: Save FreeBSD Libraries to Cache
-        uses: actions/cache/save@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/freebsd-amd64/libquestdb.so
-            core/src/main/resources/io/questdb/bin/freebsd-amd64/libquestdbr.so
-          key: nativelibs-freebsd-${{ github.sha }}
-  build-all-macos:
-    strategy:
-      matrix:
-        # macos-14 = ARM M1
-        # macos-13 = x64
-        # if you change OS definitions then you need to change conditions in cache-save steps below
-        os: [ macos-14, macos-13 ]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Install toolchains (CXX/NASM)
-        run: |
-          brew install make cmake gcc nasm
-      - name: Build CXX Library
-        run: |
+    - continue-on-error: true
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+    - continue-on-error: true
+      name: Build in FreeBSD
+      uses: vmactions/freebsd-vm@d44bf830e7d850111d27aa120d468c905e5980f4
+      with:
+        prepare: 'pkg install -y curl cmake gcc git nasm openjdk17 rust
+
+          '
+        release: 13.2
+        run: 'export JAVA_HOME=/usr/local/openjdk17
+
           cd core
+
           cmake -B build/release -DCMAKE_BUILD_TYPE=Release
+
           cmake --build build/release --config Release
-      - name: Copy darwin-aarch64 CXX Library to the final directory
-        if: ${{ matrix.os == 'macos-14' }}
-        run: |
-          mkdir -p core/src/main/resources/io/questdb/bin/darwin-aarch64/
-          mkdir -p core/src/main/bin/darwin-aarch64/
-          cp core/target/classes/io/questdb/bin-local/libquestdb.dylib core/src/main/resources/io/questdb/bin/darwin-aarch64/
-          cp core/target/classes/io/questdb/bin-local/libjemalloc.dylib core/src/main/bin/darwin-aarch64/
-      - name: Copy darwin-amd64 CXX Library to the final directory
-        if: ${{ matrix.os == 'macos-13' }}
-        run: |
-          mkdir -p core/src/main/resources/io/questdb/bin/darwin-amd64/
-          mkdir -p core/src/main/bin/darwin-amd64/
-          cp core/target/classes/io/questdb/bin-local/libquestdb.dylib core/src/main/resources/io/questdb/bin/darwin-amd64/
-          cp core/target/classes/io/questdb/bin-local/libjemalloc.dylib core/src/main/bin/darwin-amd64/
-      - name: Build Rust Library
-        run: |
-          cd core/rust/qdbr
-          cargo clean
+
+          mkdir -p src/main/resources/io/questdb/bin/freebsd-amd64/
+
+          cp target/classes/io/questdb/bin-local/libquestdb.so src/main/resources/io/questdb/bin/freebsd-amd64/
+
+          cd rust/qdbr
+
           cargo build --release
-      - name: Copy darwin-aarch64 Rust Library to the final directory
-        if: ${{ matrix.os == 'macos-14' }}
-        run: |
-          mkdir -p core/src/main/resources/io/questdb/bin/darwin-aarch64/
-          cp core/rust/qdbr/target/release/libquestdbr.dylib core/src/main/resources/io/questdb/bin/darwin-aarch64/
-      - name: Copy darwin-amd64 Rust Library to the final directory
-        if: ${{ matrix.os == 'macos-13' }}
-        run: |
-          mkdir -p core/src/main/resources/io/questdb/bin/darwin-amd64/
-          cp core/rust/qdbr/target/release/libquestdbr.dylib core/src/main/resources/io/questdb/bin/darwin-amd64/
-      - name: Save darwin-aarch64 Libraries to Cache
-        if: ${{ matrix.os == 'macos-14' }}
-        uses: actions/cache/save@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/darwin-aarch64/libquestdb.dylib
-            core/src/main/resources/io/questdb/bin/darwin-aarch64/libquestdbr.dylib
-            core/src/main/bin/darwin-aarch64/libjemalloc.dylib
-          key: nativelibs-armosx-${{ github.sha }}
-      - name: Save darwin-amd64 Libraries to Cache
-        if: ${{ matrix.os == 'macos-13' }}
-        uses: actions/cache/save@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/darwin-amd64/libquestdb.dylib
-            core/src/main/resources/io/questdb/bin/darwin-amd64/libquestdbr.dylib
-            core/src/main/bin/darwin-amd64/libjemalloc.dylib
-          key: nativelibs-osx-${{ github.sha }}
+
+          cp target/release/libquestdbr.so ../../src/main/resources/io/questdb/bin/freebsd-amd64/
+
+          '
+        usesh: true
+    - continue-on-error: true
+      name: log git status
+      run: 'git status
+
+        '
+    - continue-on-error: true
+      name: Save FreeBSD Libraries to Cache
+      uses: actions/cache/save@v3
+      with:
+        key: nativelibs-freebsd-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/freebsd-amd64/libquestdb.so
+
+          core/src/main/resources/io/questdb/bin/freebsd-amd64/libquestdbr.so
+
+          '
+  build-all-linux-aarch64:
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+    - continue-on-error: true
+      name: Increase file count and install tooling
+      run: 'sudo sysctl -w fs.file-max=500000
+
+        sudo apt-get update -y
+
+        sudo apt-get install -y nasm g++-10-aarch64-linux-gnu gcc-10-aarch64-linux-gnu
+
+        '
+    - continue-on-error: true
+      name: Install rs-cross
+      run: 'cargo install cross
+
+        '
+    - continue-on-error: true
+      name: Generate Makefiles
+      run: 'cd ./core
+
+        cmake -DCMAKE_BUILD_TYPE=Release -B cmake-build-release -S.
+
+        '
+    - continue-on-error: true
+      name: CMAKE linux-aarch64
+      run: 'cd ./core
+
+        cmake -DCMAKE_TOOLCHAIN_FILE=./src/main/c/toolchains/linux-arm64.cmake -DARM_TOOLCHAIN_PATH=/usr/bin/
+        -DCMAKE_EXECUTABLE_SUFFIX=-10 -DCMAKE_CROSSCOMPILING=True -DCMAKE_BUILD_TYPE=Release
+        -B cmake-build-release-arm64
+
+        '
+    - continue-on-error: true
+      name: Build linux-aarch64 CXX Library
+      run: 'cd core
+
+        cmake --build cmake-build-release-arm64 --config Release
+
+        mkdir -p src/main/resources/io/questdb/bin/linux-aarch64/
+
+        mkdir -p src/main/bin/linux-aarch64/
+
+        cp target/classes/io/questdb/bin-local/libquestdb.so src/main/resources/io/questdb/bin/linux-aarch64/
+
+        cp target/classes/io/questdb/bin-local/libjemalloc.so src/main/bin/linux-aarch64/
+
+        '
+    - continue-on-error: true
+      name: Build linux-aarch64 Rust Library
+      run: 'cd core/rust/qdbr
+
+        cargo clean
+
+        cross build --target aarch64-unknown-linux-gnu --release --target-dir `pwd`/target
+
+        mkdir -p ../../src/main/resources/io/questdb/bin/linux-aarch64/
+
+        cp target/aarch64-unknown-linux-gnu/release/libquestdbr.so ../../src/main/resources/io/questdb/bin/linux-aarch64/
+
+        '
+    - continue-on-error: true
+      name: Check git status
+      run: 'git status
+
+        '
+    - continue-on-error: true
+      name: Save linux-aarch64 Libraries to Cache
+      uses: actions/cache/save@v3
+      with:
+        key: nativelibs-armlinux-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/linux-aarch64/libquestdb.so
+
+          core/src/main/resources/io/questdb/bin/linux-aarch64/libquestdbr.so
+
+          core/src/main/bin/linux-aarch64/libjemalloc.so
+
+          '
   build-all-linux-amd64:
-    runs-on: ubuntu-latest
-    # this is very bare container, we use it to restrict GLIBC to 2.28
-    # everything has to be installed on it manually
     container:
       image: debian:buster
+    runs-on: self-hosted
     steps:
-      - name: Install tools (CXX/NASM/Rust)
-        run: |
-          ldd --version
-          apt-get update -y
-          apt install git nasm python3 wget ca-certificates build-essential zstd -y
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Install toolchains (Rust)
-        run: |
-          python3 ./.github/prepare_rust_env.py
-          echo "PATH=/github/home/.cargo/bin/:$PATH" >> "$GITHUB_ENV"
-      - name: Install up-to-date CMake
-        run: |
-          wget -nv https://github.com/Kitware/CMake/releases/download/v3.29.2/cmake-3.29.2-linux-x86_64.tar.gz
-          tar -zxf cmake-3.29.2-linux-x86_64.tar.gz
-          echo "PATH=`pwd`/cmake-3.29.2-linux-x86_64/bin/:$PATH" >> "$GITHUB_ENV"
-      - name: Install JDK17 (for jni.h)
-        run: |
-          wget -nv https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.11%2B9/OpenJDK17U-jdk_x64_linux_hotspot_17.0.11_9.tar.gz
-          tar xfz OpenJDK17U-jdk_x64_linux_hotspot_17.0.11_9.tar.gz
-          echo "JAVA_HOME=`pwd`/jdk-17.0.11+9/" >> "$GITHUB_ENV"
-      - name: Generate Makefiles
-        run: |
-          cd ./core
-          # git submodule update --init
-          cmake -DCMAKE_BUILD_TYPE=Release -B cmake-build-release -S.
-      - name: Build linux-amd64 CXX Library
-        run: |
-          cd core
-          cmake --build cmake-build-release --config Release
-          mkdir -p src/main/resources/io/questdb/bin/linux-amd64/
-          mkdir -p src/main/bin/linux-amd64/
-          cp target/classes/io/questdb/bin-local/libquestdb.so src/main/resources/io/questdb/bin/linux-amd64/
-          cp target/classes/io/questdb/bin-local/libjemalloc.so src/main/bin/linux-amd64/
-      - name: Build linux-amd64 Rust Library
-        run: |
-          cd core/rust/qdbr
-          cargo clean
-          cargo build --release
-          mkdir -p ../../src/main/resources/io/questdb/bin/linux-amd64/
-          cp target/release/libquestdbr.so ../../src/main/resources/io/questdb/bin/linux-amd64/
-      - name: Save linux-amd64 Libraries to Cache
-        uses: actions/cache/save@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/linux-amd64/libquestdb.so
-            core/src/main/resources/io/questdb/bin/linux-amd64/libquestdbr.so
-            core/src/main/bin/linux-amd64/libjemalloc.so
-          key: nativelibs-linux-${{ github.sha }}
-  build-all-linux-aarch64:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Increase file count and install tooling
-        run: |
-          sudo sysctl -w fs.file-max=500000
-          sudo apt-get update -y
-          sudo apt-get install -y nasm g++-10-aarch64-linux-gnu gcc-10-aarch64-linux-gnu
-      - name: Install rs-cross
-        run: |
-          cargo install cross
-      - name: Generate Makefiles
-        run: |
-          cd ./core
-          cmake -DCMAKE_BUILD_TYPE=Release -B cmake-build-release -S.
-      - name: CMAKE linux-aarch64
-        run: |
-          cd ./core
-          cmake -DCMAKE_TOOLCHAIN_FILE=./src/main/c/toolchains/linux-arm64.cmake -DARM_TOOLCHAIN_PATH=/usr/bin/ -DCMAKE_EXECUTABLE_SUFFIX=-10 -DCMAKE_CROSSCOMPILING=True -DCMAKE_BUILD_TYPE=Release -B cmake-build-release-arm64
-      - name: Build linux-aarch64 CXX Library
-        run: |
-          cd core
-          cmake --build cmake-build-release-arm64 --config Release
-          mkdir -p src/main/resources/io/questdb/bin/linux-aarch64/
-          mkdir -p src/main/bin/linux-aarch64/
-          cp target/classes/io/questdb/bin-local/libquestdb.so src/main/resources/io/questdb/bin/linux-aarch64/
-          cp target/classes/io/questdb/bin-local/libjemalloc.so src/main/bin/linux-aarch64/
-      - name: Build linux-aarch64 Rust Library
-        run: |
-          cd core/rust/qdbr
-          cargo clean
-          cross build --target aarch64-unknown-linux-gnu --release --target-dir `pwd`/target
-          mkdir -p ../../src/main/resources/io/questdb/bin/linux-aarch64/
-          cp target/aarch64-unknown-linux-gnu/release/libquestdbr.so ../../src/main/resources/io/questdb/bin/linux-aarch64/
-      - name: Check git status
-        run: |
-          git status
-      - name: Save linux-aarch64 Libraries to Cache
-        uses: actions/cache/save@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/linux-aarch64/libquestdb.so
-            core/src/main/resources/io/questdb/bin/linux-aarch64/libquestdbr.so
-            core/src/main/bin/linux-aarch64/libjemalloc.so
-          key: nativelibs-armlinux-${{ github.sha }}
-  build-cxx-windows:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Increase file count and install tooling
-        run: |
-          sudo sysctl -w fs.file-max=500000
-          sudo apt-get update -y
-          sudo apt-get install -y nasm gcc-mingw-w64 g++-mingw-w64
-      - name: Generate Makefiles
-        run: |
-          cd ./core
-          cmake -DCMAKE_BUILD_TYPE=Release -B cmake-build-release -S.
-      - name: Download windows jni_md.h from JDK 11
-        run: |
-          cd core
-          curl https://raw.githubusercontent.com/AdoptOpenJDK/openjdk-jdk11/master/src/java.base/windows/native/include/jni_md.h > $JAVA_HOME/include/jni_md.h
-      - name: CMake Windows
-        run: |
-          cd core
-          cmake -DCMAKE_TOOLCHAIN_FILE=./src/main/c/toolchains/windows-x86_64.cmake -DCMAKE_CROSSCOMPILING=True -DCMAKE_BUILD_TYPE=Release -B cmake-build-release-win64
-      - name: Build Windows CXX Library
-        run: |
-          cd core
-          cmake --build cmake-build-release-win64 --config Release
-          mkdir -p src/main/resources/io/questdb/bin/windows-amd64/
-          cp target/classes/io/questdb/bin-local/libquestdb.dll src/main/resources/io/questdb/bin/windows-amd64/
-      - name: Check CXX runtime dependency
-        run: |
-          cd ./core
-          if x86_64-w64-mingw32-objdump -p ./src/main/resources/io/questdb/bin/windows-amd64/libquestdb.dll | grep -q libstdc++; then
-            echo "Failure: CXX runtime dependency detected"
-            exit 1
-          fi
-      - name: Check git status
-        run: |
-          git status
-      - name: Save Windows CXX Library to Cache
-        uses: actions/cache/save@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/windows-amd64/libquestdb.dll
-          key: nativelibs-windows-${{ github.sha }}
-  collect-commit-and-push:
-    needs: [ build-all-freebsd, build-all-macos,build-cxx-windows, build-rust-windows, build-all-linux-amd64, build-all-linux-aarch64 ]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Print file sizes before
-        run: |
-          mkdir -p ./core/src/main/resources/io/questdb/bin/
-          find ./core/src/main/resources/io/questdb/bin/ -type f -exec ls -l {} \;
-          find ./core/src/main/bin/ -type f -exec ls -l {} \;
-      - name: Restore FreeBSD Libraries from Cache
-        uses: actions/cache/restore@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/freebsd-amd64/libquestdb.so
-            core/src/main/resources/io/questdb/bin/freebsd-amd64/libquestdbr.so
-          key: nativelibs-freebsd-${{ github.sha }}
-      - name: Restore darwin-aarch64 Libraries from Cache
-        uses: actions/cache/restore@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/darwin-aarch64/libquestdb.dylib
-            core/src/main/resources/io/questdb/bin/darwin-aarch64/libquestdbr.dylib
-            core/src/main/bin/darwin-aarch64/libjemalloc.dylib
-          key: nativelibs-armosx-${{ github.sha }}
-      - name: Restore darwin-amd64 Libraries from Cache
-        uses: actions/cache/restore@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/darwin-amd64/libquestdb.dylib
-            core/src/main/resources/io/questdb/bin/darwin-amd64/libquestdbr.dylib
-            core/src/main/bin/darwin-amd64/libjemalloc.dylib
-          key: nativelibs-osx-${{ github.sha }}
-      - name: Restore linux-amd64 Libraries from Cache
-        uses: actions/cache/restore@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/linux-amd64/libquestdb.so
-            core/src/main/resources/io/questdb/bin/linux-amd64/libquestdbr.so
-            core/src/main/bin/linux-amd64/libjemalloc.so
-          key: nativelibs-linux-${{ github.sha }}
-      - name: Restore linux-aarch64 Libraries from Cache
-        uses: actions/cache/restore@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/linux-aarch64/libquestdb.so
-            core/src/main/resources/io/questdb/bin/linux-aarch64/libquestdbr.so
-            core/src/main/bin/linux-aarch64/libjemalloc.so
-          key: nativelibs-armlinux-${{ github.sha }}
-      - name: Restore Windows CXX Library from Cache
-        uses: actions/cache/restore@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/windows-amd64/libquestdb.dll
-          key: nativelibs-windows-${{ github.sha }}
-      - name: Restore Windows Rust Library from Cache
-        uses: actions/cache/restore@v3
-        with:
-          path: |
-            core/src/main/resources/io/questdb/bin/windows-amd64/questdbr.dll
-          key: nativelibs-windows-rust-${{ github.sha }}
-          enableCrossOsArchive: true
-      - name: Check git status before
-        run: |
-          git status
-      - name: Commit the files
-        run: |
-          git config --global user.name 'GitHub Actions - Rebuild Native Libraries'
-          git config --global user.email 'jaromir@questdb.io'
-          git add core/src/main/resources/io/questdb/bin/darwin-aarch64/libquestdb.dylib
-          git add core/src/main/resources/io/questdb/bin/darwin-aarch64/libquestdbr.dylib
-          git add core/src/main/bin/darwin-aarch64/libjemalloc.dylib
-          git add core/src/main/resources/io/questdb/bin/darwin-amd64/libquestdb.dylib
-          git add core/src/main/resources/io/questdb/bin/darwin-amd64/libquestdbr.dylib
-          git add core/src/main/bin/darwin-amd64/libjemalloc.dylib
-          git add core/src/main/resources/io/questdb/bin/freebsd-amd64/libquestdb.so
-          git add core/src/main/resources/io/questdb/bin/freebsd-amd64/libquestdbr.so
-          git add core/src/main/resources/io/questdb/bin/linux-amd64/libquestdb.so
-          git add core/src/main/resources/io/questdb/bin/linux-amd64/libquestdbr.so
-          git add core/src/main/bin/linux-amd64/libjemalloc.so
-          git add core/src/main/resources/io/questdb/bin/linux-aarch64/libquestdb.so
-          git add core/src/main/resources/io/questdb/bin/linux-aarch64/libquestdbr.so
-          git add core/src/main/bin/linux-aarch64/libjemalloc.so
-          git add core/src/main/resources/io/questdb/bin/windows-amd64/libquestdb.dll
-          git add core/src/main/resources/io/questdb/bin/windows-amd64/questdbr.dll
-          git commit -m "chore(build): rebuild CXX/Rust libraries"
-      - name: Check git status after
-        run: |
-          git status
-      - name: Print file sizes after
-        run: |
-          find ./core/src/main/resources/io/questdb/bin/ -type f -exec ls -l {} \;
-          find ./core/src/main/bin/ -type f -exec ls -l {} \;
-      - name: Push the files to the current branch
-        uses: ad-m/github-push-action@d91a481090679876dfc4178fef17f286781251df
-        # Why do we use a commit hash instead of a tag for the github-push-action?
-        # ad-m/github-push-action is not as well-known repo as e.g. actions/checkout, and therefore we trust it less.
-        # d91a48109 is the same as the tag v0.8.0, but it's guaranteed to be immutable.
-        # So even if a bad actor takes over the repo, and rewrites tags to point to malicious commits, we will still be safe.
-        with:
-          branch: ${{ github.head_ref || github.ref_name }}
+    - continue-on-error: true
+      name: Install tools (CXX/NASM/Rust)
+      run: 'ldd --version
 
+        apt-get update -y
+
+        apt install git nasm python3 wget ca-certificates build-essential zstd -y
+
+        '
+    - continue-on-error: true
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+    - continue-on-error: true
+      name: Install toolchains (Rust)
+      run: 'python3 ./.github/prepare_rust_env.py
+
+        echo "PATH=/github/home/.cargo/bin/:$PATH" >> "$GITHUB_ENV"
+
+        '
+    - continue-on-error: true
+      name: Install up-to-date CMake
+      run: 'wget -nv https://github.com/Kitware/CMake/releases/download/v3.29.2/cmake-3.29.2-linux-x86_64.tar.gz
+
+        tar -zxf cmake-3.29.2-linux-x86_64.tar.gz
+
+        echo "PATH=`pwd`/cmake-3.29.2-linux-x86_64/bin/:$PATH" >> "$GITHUB_ENV"
+
+        '
+    - continue-on-error: true
+      name: Install JDK17 (for jni.h)
+      run: 'wget -nv https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.11%2B9/OpenJDK17U-jdk_x64_linux_hotspot_17.0.11_9.tar.gz
+
+        tar xfz OpenJDK17U-jdk_x64_linux_hotspot_17.0.11_9.tar.gz
+
+        echo "JAVA_HOME=`pwd`/jdk-17.0.11+9/" >> "$GITHUB_ENV"
+
+        '
+    - continue-on-error: true
+      name: Generate Makefiles
+      run: 'cd ./core
+
+        # git submodule update --init
+
+        cmake -DCMAKE_BUILD_TYPE=Release -B cmake-build-release -S.
+
+        '
+    - continue-on-error: true
+      name: Build linux-amd64 CXX Library
+      run: 'cd core
+
+        cmake --build cmake-build-release --config Release
+
+        mkdir -p src/main/resources/io/questdb/bin/linux-amd64/
+
+        mkdir -p src/main/bin/linux-amd64/
+
+        cp target/classes/io/questdb/bin-local/libquestdb.so src/main/resources/io/questdb/bin/linux-amd64/
+
+        cp target/classes/io/questdb/bin-local/libjemalloc.so src/main/bin/linux-amd64/
+
+        '
+    - continue-on-error: true
+      name: Build linux-amd64 Rust Library
+      run: 'cd core/rust/qdbr
+
+        cargo clean
+
+        cargo build --release
+
+        mkdir -p ../../src/main/resources/io/questdb/bin/linux-amd64/
+
+        cp target/release/libquestdbr.so ../../src/main/resources/io/questdb/bin/linux-amd64/
+
+        '
+    - continue-on-error: true
+      name: Save linux-amd64 Libraries to Cache
+      uses: actions/cache/save@v3
+      with:
+        key: nativelibs-linux-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/linux-amd64/libquestdb.so
+
+          core/src/main/resources/io/questdb/bin/linux-amd64/libquestdbr.so
+
+          core/src/main/bin/linux-amd64/libjemalloc.so
+
+          '
+  build-all-macos:
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+    - continue-on-error: true
+      name: Install toolchains (CXX/NASM)
+      run: 'brew install make cmake gcc nasm
+
+        '
+    - continue-on-error: true
+      name: Build CXX Library
+      run: 'cd core
+
+        cmake -B build/release -DCMAKE_BUILD_TYPE=Release
+
+        cmake --build build/release --config Release
+
+        '
+    - continue-on-error: true
+      if: ${{ matrix.os == 'macos-14' }}
+      name: Copy darwin-aarch64 CXX Library to the final directory
+      run: 'mkdir -p core/src/main/resources/io/questdb/bin/darwin-aarch64/
+
+        mkdir -p core/src/main/bin/darwin-aarch64/
+
+        cp core/target/classes/io/questdb/bin-local/libquestdb.dylib core/src/main/resources/io/questdb/bin/darwin-aarch64/
+
+        cp core/target/classes/io/questdb/bin-local/libjemalloc.dylib core/src/main/bin/darwin-aarch64/
+
+        '
+    - continue-on-error: true
+      if: ${{ matrix.os == 'macos-13' }}
+      name: Copy darwin-amd64 CXX Library to the final directory
+      run: 'mkdir -p core/src/main/resources/io/questdb/bin/darwin-amd64/
+
+        mkdir -p core/src/main/bin/darwin-amd64/
+
+        cp core/target/classes/io/questdb/bin-local/libquestdb.dylib core/src/main/resources/io/questdb/bin/darwin-amd64/
+
+        cp core/target/classes/io/questdb/bin-local/libjemalloc.dylib core/src/main/bin/darwin-amd64/
+
+        '
+    - continue-on-error: true
+      name: Build Rust Library
+      run: 'cd core/rust/qdbr
+
+        cargo clean
+
+        cargo build --release
+
+        '
+    - continue-on-error: true
+      if: ${{ matrix.os == 'macos-14' }}
+      name: Copy darwin-aarch64 Rust Library to the final directory
+      run: 'mkdir -p core/src/main/resources/io/questdb/bin/darwin-aarch64/
+
+        cp core/rust/qdbr/target/release/libquestdbr.dylib core/src/main/resources/io/questdb/bin/darwin-aarch64/
+
+        '
+    - continue-on-error: true
+      if: ${{ matrix.os == 'macos-13' }}
+      name: Copy darwin-amd64 Rust Library to the final directory
+      run: 'mkdir -p core/src/main/resources/io/questdb/bin/darwin-amd64/
+
+        cp core/rust/qdbr/target/release/libquestdbr.dylib core/src/main/resources/io/questdb/bin/darwin-amd64/
+
+        '
+    - continue-on-error: true
+      if: ${{ matrix.os == 'macos-14' }}
+      name: Save darwin-aarch64 Libraries to Cache
+      uses: actions/cache/save@v3
+      with:
+        key: nativelibs-armosx-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/darwin-aarch64/libquestdb.dylib
+
+          core/src/main/resources/io/questdb/bin/darwin-aarch64/libquestdbr.dylib
+
+          core/src/main/bin/darwin-aarch64/libjemalloc.dylib
+
+          '
+    - continue-on-error: true
+      if: ${{ matrix.os == 'macos-13' }}
+      name: Save darwin-amd64 Libraries to Cache
+      uses: actions/cache/save@v3
+      with:
+        key: nativelibs-osx-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/darwin-amd64/libquestdb.dylib
+
+          core/src/main/resources/io/questdb/bin/darwin-amd64/libquestdbr.dylib
+
+          core/src/main/bin/darwin-amd64/libjemalloc.dylib
+
+          '
+    strategy:
+      matrix:
+        os:
+        - macos-14
+        - macos-13
+  build-cxx-windows:
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+    - continue-on-error: true
+      name: Increase file count and install tooling
+      run: 'sudo sysctl -w fs.file-max=500000
+
+        sudo apt-get update -y
+
+        sudo apt-get install -y nasm gcc-mingw-w64 g++-mingw-w64
+
+        '
+    - continue-on-error: true
+      name: Generate Makefiles
+      run: 'cd ./core
+
+        cmake -DCMAKE_BUILD_TYPE=Release -B cmake-build-release -S.
+
+        '
+    - continue-on-error: true
+      name: Download windows jni_md.h from JDK 11
+      run: 'cd core
+
+        curl https://raw.githubusercontent.com/AdoptOpenJDK/openjdk-jdk11/master/src/java.base/windows/native/include/jni_md.h
+        > $JAVA_HOME/include/jni_md.h
+
+        '
+    - continue-on-error: true
+      name: CMake Windows
+      run: 'cd core
+
+        cmake -DCMAKE_TOOLCHAIN_FILE=./src/main/c/toolchains/windows-x86_64.cmake
+        -DCMAKE_CROSSCOMPILING=True -DCMAKE_BUILD_TYPE=Release -B cmake-build-release-win64
+
+        '
+    - continue-on-error: true
+      name: Build Windows CXX Library
+      run: 'cd core
+
+        cmake --build cmake-build-release-win64 --config Release
+
+        mkdir -p src/main/resources/io/questdb/bin/windows-amd64/
+
+        cp target/classes/io/questdb/bin-local/libquestdb.dll src/main/resources/io/questdb/bin/windows-amd64/
+
+        '
+    - continue-on-error: true
+      name: Check CXX runtime dependency
+      run: "cd ./core\nif x86_64-w64-mingw32-objdump -p ./src/main/resources/io/questdb/bin/windows-amd64/libquestdb.dll\
+        \ | grep -q libstdc++; then\n  echo \"Failure: CXX runtime dependency detected\"\
+        \n  exit 1\nfi\n"
+    - continue-on-error: true
+      name: Check git status
+      run: 'git status
+
+        '
+    - continue-on-error: true
+      name: Save Windows CXX Library to Cache
+      uses: actions/cache/save@v3
+      with:
+        key: nativelibs-windows-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/windows-amd64/libquestdb.dll
+
+          '
+  build-rust-windows:
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+    - continue-on-error: true
+      name: Build Rust Library
+      run: 'cd core/rust/qdbr
+
+        cargo build --release
+
+        '
+    - continue-on-error: true
+      name: log git status
+      run: 'git status
+
+        '
+    - continue-on-error: true
+      name: Copy Rust Library to the final directory
+      run: 'cp core/rust/qdbr/target/release/questdbr.dll core/src/main/resources/io/questdb/bin/windows-amd64/
+
+        '
+    - continue-on-error: true
+      name: Save Windows Rust Library to Cache
+      uses: actions/cache/save@v3
+      with:
+        enableCrossOsArchive: true
+        key: nativelibs-windows-rust-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/windows-amd64/questdbr.dll
+
+          '
+  collect-commit-and-push:
+    needs:
+    - build-all-freebsd
+    - build-all-macos
+    - build-cxx-windows
+    - build-rust-windows
+    - build-all-linux-amd64
+    - build-all-linux-aarch64
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      uses: actions/checkout@v4
+    - continue-on-error: true
+      name: Print file sizes before
+      run: 'mkdir -p ./core/src/main/resources/io/questdb/bin/
+
+        find ./core/src/main/resources/io/questdb/bin/ -type f -exec ls -l {} \;
+
+        find ./core/src/main/bin/ -type f -exec ls -l {} \;
+
+        '
+    - continue-on-error: true
+      name: Restore FreeBSD Libraries from Cache
+      uses: actions/cache/restore@v3
+      with:
+        key: nativelibs-freebsd-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/freebsd-amd64/libquestdb.so
+
+          core/src/main/resources/io/questdb/bin/freebsd-amd64/libquestdbr.so
+
+          '
+    - continue-on-error: true
+      name: Restore darwin-aarch64 Libraries from Cache
+      uses: actions/cache/restore@v3
+      with:
+        key: nativelibs-armosx-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/darwin-aarch64/libquestdb.dylib
+
+          core/src/main/resources/io/questdb/bin/darwin-aarch64/libquestdbr.dylib
+
+          core/src/main/bin/darwin-aarch64/libjemalloc.dylib
+
+          '
+    - continue-on-error: true
+      name: Restore darwin-amd64 Libraries from Cache
+      uses: actions/cache/restore@v3
+      with:
+        key: nativelibs-osx-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/darwin-amd64/libquestdb.dylib
+
+          core/src/main/resources/io/questdb/bin/darwin-amd64/libquestdbr.dylib
+
+          core/src/main/bin/darwin-amd64/libjemalloc.dylib
+
+          '
+    - continue-on-error: true
+      name: Restore linux-amd64 Libraries from Cache
+      uses: actions/cache/restore@v3
+      with:
+        key: nativelibs-linux-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/linux-amd64/libquestdb.so
+
+          core/src/main/resources/io/questdb/bin/linux-amd64/libquestdbr.so
+
+          core/src/main/bin/linux-amd64/libjemalloc.so
+
+          '
+    - continue-on-error: true
+      name: Restore linux-aarch64 Libraries from Cache
+      uses: actions/cache/restore@v3
+      with:
+        key: nativelibs-armlinux-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/linux-aarch64/libquestdb.so
+
+          core/src/main/resources/io/questdb/bin/linux-aarch64/libquestdbr.so
+
+          core/src/main/bin/linux-aarch64/libjemalloc.so
+
+          '
+    - continue-on-error: true
+      name: Restore Windows CXX Library from Cache
+      uses: actions/cache/restore@v3
+      with:
+        key: nativelibs-windows-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/windows-amd64/libquestdb.dll
+
+          '
+    - continue-on-error: true
+      name: Restore Windows Rust Library from Cache
+      uses: actions/cache/restore@v3
+      with:
+        enableCrossOsArchive: true
+        key: nativelibs-windows-rust-${{ github.sha }}
+        path: 'core/src/main/resources/io/questdb/bin/windows-amd64/questdbr.dll
+
+          '
+    - continue-on-error: true
+      name: Check git status before
+      run: 'git status
+
+        '
+    - continue-on-error: true
+      name: Commit the files
+      run: 'git config --global user.name ''GitHub Actions - Rebuild Native Libraries''
+
+        git config --global user.email ''jaromir@questdb.io''
+
+        git add core/src/main/resources/io/questdb/bin/darwin-aarch64/libquestdb.dylib
+
+        git add core/src/main/resources/io/questdb/bin/darwin-aarch64/libquestdbr.dylib
+
+        git add core/src/main/bin/darwin-aarch64/libjemalloc.dylib
+
+        git add core/src/main/resources/io/questdb/bin/darwin-amd64/libquestdb.dylib
+
+        git add core/src/main/resources/io/questdb/bin/darwin-amd64/libquestdbr.dylib
+
+        git add core/src/main/bin/darwin-amd64/libjemalloc.dylib
+
+        git add core/src/main/resources/io/questdb/bin/freebsd-amd64/libquestdb.so
+
+        git add core/src/main/resources/io/questdb/bin/freebsd-amd64/libquestdbr.so
+
+        git add core/src/main/resources/io/questdb/bin/linux-amd64/libquestdb.so
+
+        git add core/src/main/resources/io/questdb/bin/linux-amd64/libquestdbr.so
+
+        git add core/src/main/bin/linux-amd64/libjemalloc.so
+
+        git add core/src/main/resources/io/questdb/bin/linux-aarch64/libquestdb.so
+
+        git add core/src/main/resources/io/questdb/bin/linux-aarch64/libquestdbr.so
+
+        git add core/src/main/bin/linux-aarch64/libjemalloc.so
+
+        git add core/src/main/resources/io/questdb/bin/windows-amd64/libquestdb.dll
+
+        git add core/src/main/resources/io/questdb/bin/windows-amd64/questdbr.dll
+
+        git commit -m "chore(build): rebuild CXX/Rust libraries"
+
+        '
+    - continue-on-error: true
+      name: Check git status after
+      run: 'git status
+
+        '
+    - continue-on-error: true
+      name: Print file sizes after
+      run: 'find ./core/src/main/resources/io/questdb/bin/ -type f -exec ls -l {}
+        \;
+
+        find ./core/src/main/bin/ -type f -exec ls -l {} \;
+
+        '
+    - continue-on-error: true
+      name: Push the files to the current branch
+      uses: ad-m/github-push-action@d91a481090679876dfc4178fef17f286781251df
+      with:
+        branch: ${{ github.head_ref || github.ref_name }}
+name: Build and Push Release CXX/Rust libraries
+on:
+  repository_dispatch:
+    types: trigger-ga___rebuild_native_libs.yml
